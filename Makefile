@@ -76,8 +76,10 @@ $(BINARY).hex: $(BINARY).elf
 #        -c "reset" \
 #        -c "shutdown" $(NULL)
 
+
 flash: $(BINARY).bin
-		st-flash write $(BINARY).bin 0x08000000
+		st-flash erase
+		st-flash --reset write $(BINARY).bin 0x08000000
 
 clean:
 	rm -f *.lst *.o *.elf *.bin *.hex *.d

@@ -2,11 +2,13 @@
 #include <libopencm3/stm32/gpio.h>
 #include <libopencm3/cm3/nvic.h>
 #include <libopencm3/stm32/timer.h>
+#include <libopencm3/stm32/pwr.h>
+#include <libopencm3/stm32/rtc.h>
 
 #define PORT_LED GPIOB
 #define PIN_LED GPIO1
 
-
+/*
 #define 	SET_CLOCK()				gpio_set(GPIOA, GPIO0)
 #define 	CLEAR_CLOCK()			gpio_clear(GPIOA, GPIO0)
 #define 	SET_DATAIN()			gpio_set(GPIOA, GPIO1)
@@ -15,6 +17,16 @@
 #define 	CLEAR_STROBE()			gpio_clear(GPIOA, GPIO2)
 #define		SET_BLANK()				gpio_set(GPIOA, GPIO3)
 #define		CLEAR_BLANK()			gpio_clear(GPIOA, GPIO3)
+*/
+
+#define 	SET_CLOCK()				gpio_clear(GPIOA, GPIO0)
+#define 	CLEAR_CLOCK()			gpio_set(GPIOA, GPIO0)
+#define 	SET_DATAIN()			gpio_clear(GPIOA, GPIO1)
+#define 	CLEAR_DATAIN()			gpio_set(GPIOA, GPIO1)
+#define 	SET_STROBE()			gpio_clear(GPIOA, GPIO2)
+#define 	CLEAR_STROBE()			gpio_set(GPIOA, GPIO2)
+#define		SET_BLANK()				gpio_clear(GPIOA, GPIO3)
+#define		CLEAR_BLANK()			gpio_set(GPIOA, GPIO3)
 
 static uint8_t digits[9] = {10,9,8,7,6,5,4,3,2};
 
@@ -41,6 +53,45 @@ static void rcc_setup(void)
 	rcc_periph_clock_enable(RCC_GPIOB);
 	rcc_periph_clock_enable(RCC_GPIOA);
 	rcc_periph_clock_enable(RCC_TIM3);
+	rcc_periph_clock_enable(RCC_PWR);
+
+	// Enable HSE for the RTC
+	RCC_CR |= RCC_CR_HSEON;
+	while( (RCC_CR & RCC_CR_HSERDY) == 0)
+		__asm__("nop");
+}
+
+static void rtc_setup()
+{
+	pwr_disable_backup_domain_write_protect();
+
+	// Reset RTC domain controller
+	RCC_BDCR |= RCC_BDCR_BDRST;
+	RCC_BDCR &= ~RCC_BDCR_BDRST;
+
+	// Select HSE
+	RCC_BDCR |= RCC_BDCR_RTCSEL_HSE;
+	// Enable RTC
+	RCC_BDCR |= RCC_BDCR_RTCEN;
+
+	rtc_wait_for_synchro();
+
+
+	rtc_unlock();
+	// Enter init mode
+	RTC_ISR |= RTC_ISR_INIT;
+	// Wait for init flag
+	while( (RTC_ISR & RTC_ISR_INITF) == 0 )
+		__asm__("nop");
+
+	// Set the prescaler
+	// Using a 8Mhz crystal here.
+	rtc_set_prescaler(2000-1, 125-1);
+
+	// Exit init mode
+	RTC_ISR &= ~RTC_ISR_INIT;
+
+	rtc_lock();
 }
 
 static void gpio_setup(void)
@@ -63,10 +114,9 @@ static void tim3_setup(void)
 	 * - Direction up
 	 */
 	timer_set_mode(TIM3, TIM_CR1_CKD_CK_INT, TIM_CR1_CMS_EDGE, TIM_CR1_DIR_UP);
-	//timer_set_oc_mode(TIM3, TIM_OC1, TIM_OCM_ACTIVE);
+	
 	/* Reset prescaler value. */
-	timer_set_prescaler(TIM3, 1024);
-	//TIM3_PSC = 1024;
+	timer_set_prescaler(TIM3, 512);
 
 	/* Enable preload. */
 	timer_disable_preload(TIM3);
@@ -74,21 +124,13 @@ static void tim3_setup(void)
 	/* Continous mode. */
 	timer_continuous_mode(TIM3);
 
-	timer_set_period(TIM3, 20);
+	timer_set_period(TIM3, 15);
 
 	/* Disable outputs. */
 	timer_disable_oc_output(TIM3, TIM_OC1);
 	timer_disable_oc_output(TIM3, TIM_OC2);
 	timer_disable_oc_output(TIM3, TIM_OC3);
 	timer_disable_oc_output(TIM3, TIM_OC4);
-
-	/* Configure global mode of line 1. */
-	// timer_disable_oc_clear(TIM3, TIM_OC1);
-	// timer_disable_oc_preload(TIM3, TIM_OC1);
-	// timer_set_oc_slow_mode(TIM3, TIM_OC1);
-	// timer_set_oc_mode(TIM3, TIM_OC1, TIM_OCM_FROZEN);
-
-	//TIM3_CCR1=200;
 
 	/* Counter enable. */
 	timer_enable_counter(TIM3);
@@ -97,22 +139,37 @@ static void tim3_setup(void)
 	timer_enable_irq(TIM3, TIM_DIER_CC1IE);
 }
 
+void clear_digits()
+{
+	int i;
+	for(i=0;i!=9;++i) {
+		digits[i] = ' ';
+	}
+}
 
 int main(void)
 {
 	int i;
 	rcc_setup();
+	rtc_setup();
 	gpio_setup();
 	tim3_setup();
 
-	//nvic_enable_irq(NVIC_TIM3_IRQ);
-
-	/* Blink the LED (PC8) on the board. */
 	while (1) {
-		//gpio_toggle(PORT_LED, PIN_LED); /* LED on/off */
-		for (i = 0; i < 500000; i++) { /* Wait a bit. */
+		gpio_toggle(PORT_LED, PIN_LED); /* LED on/off */
+		for (i = 0; i < 100; i++) { /* Wait a bit. */
 			__asm__("nop");
 		}
+		clear_digits();
+		uint8_t s = 0;
+		digits[8] = RTC_TR & RTC_TR_SU_MASK;
+		digits[7] = (RTC_TR & (RTC_TR_ST_MASK << RTC_TR_ST_SHIFT)) >> RTC_TR_ST_SHIFT;
+		digits[6] = 11;
+		digits[5] = (RTC_TR & (RTC_TR_MNU_MASK << RTC_TR_MNU_SHIFT)) >> RTC_TR_MNU_SHIFT;
+		digits[4] = (RTC_TR & (RTC_TR_MNT_MASK << RTC_TR_MNT_SHIFT)) >> RTC_TR_MNT_SHIFT;
+		digits[3] = 11;
+		digits[2] = (RTC_TR & (RTC_TR_HU_MASK << RTC_TR_HU_SHIFT)) >> RTC_TR_HU_SHIFT;
+		digits[1] = (RTC_TR & (RTC_TR_HT_MASK << RTC_TR_HT_SHIFT)) >> RTC_TR_HT_SHIFT;
 	}
 
 	return 0;
@@ -126,47 +183,53 @@ void tim3_isr(void)
 	uint32_t data_out;
 	uint16_t digit;
 	uint32_t i;
+	volatile t;
 
 	if (timer_get_flag(TIM3, TIM_SR_CC1IF)) {
 
-		/* Clear compare interrupt flag. */
+		// Clear compare interrupt flag.
 		timer_clear_flag(TIM3, TIM_SR_CC1IF);
 
-		gpio_toggle(PORT_LED, PIN_LED); /* LED on/off */
-
-
+		//gpio_toggle(PORT_LED, PIN_LED); // LED on/off
 
 		digit = (1 << cnt);
 		data_out = digit;
 		data_out |= (uint32_t)segments[digits[cnt]] << 10;
 
-		//set_bl(1);
 		SET_BLANK();
+		__asm__("nop");
+		__asm__("nop");
 
 		i=20;
 		do{
 			i--;
-			//set_di(data_out & (1 << i) );
 			if(data_out & (1 << i) )
 				SET_DATAIN();
 			else
 				CLEAR_DATAIN();
 			
+				__asm__("nop");
 			//set_clk(1);
 			SET_CLOCK();
+			for (t=0;t!=3;++t)
+				__asm__("nop");
+			
+			
 			//timeout();
-			//set_clk(0);
 			CLEAR_CLOCK();
+			for (t=0;t!=3;++t)
+				__asm__("nop");
 			//timeout();
 		} while ( i!=0 );
 		
-		//set_str(1);
 		SET_STROBE();
-		//timeout();
-		//set_str(0);
+		for (t=0;t!=4;++t)
+				__asm__("nop");
+		
 		CLEAR_STROBE();
-		//timeout();
-		//set_bl(0);
+		for (t=0;t!=4;++t)
+				__asm__("nop");
+		
 		CLEAR_BLANK();
 
 		cnt++;
@@ -174,3 +237,67 @@ void tim3_isr(void)
 		count++;
 	}
 }
+
+/*
+void tim3_isr(void)
+{
+	static uint8_t cnt = 0;
+	uint8_t s;
+	uint32_t data_out;
+	uint16_t digit;
+	uint32_t i;
+	volatile t;
+
+	if (timer_get_flag(TIM3, TIM_SR_CC1IF)) {
+
+		// Clear compare interrupt flag.
+		timer_clear_flag(TIM3, TIM_SR_CC1IF);
+
+		//gpio_toggle(PORT_LED, PIN_LED); // LED on/off
+
+		digit = (1 << cnt);
+		data_out = digit;
+		data_out |= (uint32_t)segments[digits[cnt]] << 10;
+
+		SET_BLANK();
+		__asm__("nop");
+		__asm__("nop");
+
+		i=20;
+		do{
+			i--;
+			if(data_out & (1 << i) )
+				SET_DATAIN();
+			else
+				CLEAR_DATAIN();
+			
+				__asm__("nop");
+			//set_clk(1);
+			SET_CLOCK();
+			for (t=0;t!=2;++t)
+				__asm__("nop");
+			
+			
+			//timeout();
+			CLEAR_CLOCK();
+			for (t=0;t!=2;++t)
+				__asm__("nop");
+			//timeout();
+		} while ( i!=0 );
+		
+		SET_STROBE();
+		for (t=0;t!=4;++t)
+				__asm__("nop");
+		
+		CLEAR_STROBE();
+		for (t=0;t!=4;++t)
+				__asm__("nop");
+		
+		CLEAR_BLANK();
+
+		cnt++;
+		cnt %=10;
+		count++;
+	}
+}
+*/
