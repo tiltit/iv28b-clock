@@ -28,6 +28,12 @@
 #define		SET_BLANK()				gpio_clear(GPIOA, GPIO3)
 #define		CLEAR_BLANK()			gpio_set(GPIOA, GPIO3)
 
+struct Time {
+	uint8_t hours;
+	uint8_t minutes;
+	uint8_t seconds;
+} time;
+
 static uint8_t digits[9] = {10,9,8,7,6,5,4,3,2};
 
 static int count = -200000;
@@ -49,11 +55,18 @@ static const uint8_t segments[12] = {
 
 enum BUTTONS {
 	BUTTON_1_PRESS = 1,
-	BUTTON_1_RELEASE = 8,
 	BUTTON_2_PRESS = 2,
-	BUTTON_2_RELEASE = 16,
 	BUTTON_3_PRESS = 4,
-	BUTTON_3_RELEASE = 32
+	BUTTON_1_RELEASE = 8,
+	BUTTON_2_RELEASE = 16,
+	BUTTON_3_RELEASE = 32,
+	BUTTON_1_IS_PRESSED = 64,
+	BUTTON_2_IS_PRESSED = 128,
+	BUTTON_3_IS_PRESSED = 256,
+	BUTTON_1_IS_RELEASED = 512,
+	BUTTON_2_IS_RELEASED = 1024,
+	BUTTON_3_IS_RELEASED = 2048
+
 } buttons;
 
 static void rcc_setup(void)
@@ -111,6 +124,8 @@ static void gpio_setup(void)
 
 	// Inputs
 	gpio_mode_setup(GPIOA, GPIO_MODE_INPUT, GPIO_PUPD_NONE, GPIO5 | GPIO6 | GPIO7);
+	buttons = 0;
+	buttons = ( BUTTON_1_IS_RELEASED | BUTTON_2_IS_RELEASED | BUTTON_3_IS_RELEASED);
 }
 
 static void tim3_setup(void)
@@ -160,10 +175,10 @@ void clear_digits()
 	}
 }
 
-void set_hour(uint8_t h)
+void set_time(uint8_t h, uint8_t m, uint8_t s)
 {
 	uint32_t t = 0;
-	t=RTC_TR;
+	t = RTC_TR;
 
 	t &= ~( RTC_TR_HU_MASK << RTC_TR_HU_SHIFT);
 	t |= ( (h % 10) << RTC_TR_HU_SHIFT);
@@ -172,6 +187,18 @@ void set_hour(uint8_t h)
 	t |= ( (h / 10) << RTC_TR_HT_SHIFT);
 
 
+	t &= ~( RTC_TR_MNU_MASK << RTC_TR_MNU_SHIFT);
+	t |= ( (m % 10) << RTC_TR_MNU_SHIFT);
+
+	t &= ~( RTC_TR_MNT_MASK << RTC_TR_MNT_SHIFT);
+	t |= ( (m / 10) << RTC_TR_MNT_SHIFT);
+
+
+	t &= ~( RTC_TR_SU_MASK << RTC_TR_SU_SHIFT);
+	t |= ( (s % 10) << RTC_TR_SU_SHIFT);
+
+	t &= ~( RTC_TR_ST_MASK << RTC_TR_ST_SHIFT);
+	t |= ( (s / 10) << RTC_TR_ST_SHIFT);
 
 	rtc_unlock();
 	RTC_ISR |= RTC_ISR_INIT;
@@ -186,37 +213,84 @@ void set_hour(uint8_t h)
 
 void procces_intput()
 {
-	static bool b1_triggered = false;
-	static bool b2_triggered = false;
-	static bool b3_triggered = false;
 
-	if( (buttons & BUTTON_1_PRESS) && (b1_triggered == false) ) {
-		set_hour(23);
+	if( (buttons & BUTTON_1_PRESS)) {
+		set_time( (time.hours + 1) % 24, time.minutes, time.seconds);
 		gpio_toggle(PORT_LED, PIN_LED);
-		b1_triggered = true;
 	}
 
-	if(buttons & BUTTON_1_RELEASE) {
-		b1_triggered = false;
-	}	
-
-	if( (buttons & BUTTON_2_PRESS) && (b2_triggered == false) ) {
-		b2_triggered = true;
+	if( buttons & BUTTON_2_PRESS) {
+		set_time( time.hours, (time.minutes + 1) % 60, time.seconds);
+		gpio_toggle(PORT_LED, PIN_LED);
 	}
 
-	if( buttons & BUTTON_2_RELEASE ) {
-		b2_triggered = false;
+	if( buttons & BUTTON_3_PRESS ) {
+		set_time( time.hours, time.minutes, (time.seconds +1) % 60);
+		gpio_toggle(PORT_LED, PIN_LED);
 	}
 
-	if( (buttons & BUTTON_3_PRESS) && (b3_triggered == false) ) {
-		b3_triggered = true;
-	}
-
-	if( buttons & BUTTON_3_RELEASE ) {
-		b3_triggered = false;
-	}
 }
 
+void get_buttons_input()
+{
+	volatile bool bt1 = gpio_get(GPIOA, GPIO7);
+	volatile bool bt2 = gpio_get(GPIOA, GPIO6);
+	volatile bool bt3 = gpio_get(GPIOA, GPIO5);
+
+	// Buttons
+	if ( (bt1 == false) && ( buttons & BUTTON_1_IS_RELEASED) ) {
+		buttons |= (BUTTON_1_PRESS | BUTTON_1_IS_PRESSED);
+		buttons &= ~(BUTTON_1_IS_RELEASED);
+
+	} else if ( (bt1 == true) && (buttons & BUTTON_1_IS_PRESSED) ){
+		buttons |= (BUTTON_1_RELEASE | BUTTON_1_IS_RELEASED);
+		buttons &= ~(BUTTON_1_IS_PRESSED);
+	}
+
+	if ( (bt2 == false) && ( buttons & BUTTON_2_IS_RELEASED) ) {
+		buttons |= (BUTTON_2_PRESS | BUTTON_2_IS_PRESSED);
+		buttons &= ~(BUTTON_2_IS_RELEASED);
+
+	} else if ( (bt2 == true) && (buttons & BUTTON_2_IS_PRESSED) ){
+		buttons |= (BUTTON_2_RELEASE | BUTTON_2_IS_RELEASED);
+		buttons &= ~(BUTTON_2_IS_PRESSED);
+	}
+
+	if ( (bt3 == false) && ( buttons & BUTTON_3_IS_RELEASED) ) {
+		buttons |=  (BUTTON_3_PRESS | BUTTON_3_IS_PRESSED);
+		buttons &= ~(BUTTON_3_IS_RELEASED);
+
+	} else if ( (bt3 == true) && (buttons & BUTTON_3_IS_PRESSED) ){
+		buttons |= (BUTTON_3_RELEASE | BUTTON_3_IS_RELEASED);
+		buttons &= ~(BUTTON_3_IS_PRESSED);
+	}
+	procces_intput();
+	// Remove single shot button events
+	buttons &= ~(BUTTON_3_PRESS | BUTTON_3_RELEASE | BUTTON_2_PRESS | BUTTON_2_RELEASE | BUTTON_1_PRESS | BUTTON_1_RELEASE);
+}
+
+void get_time()
+{
+	uint32_t time_register = RTC_TR;
+	time.seconds = time_register & RTC_TR_SU_MASK;
+	time.seconds += ((time_register & (RTC_TR_ST_MASK << RTC_TR_ST_SHIFT)) >> RTC_TR_ST_SHIFT) * 10;
+	time.minutes = (time_register & (RTC_TR_MNU_MASK << RTC_TR_MNU_SHIFT)) >> RTC_TR_MNU_SHIFT;
+	time.minutes += ((time_register & (RTC_TR_MNT_MASK << RTC_TR_MNT_SHIFT)) >> RTC_TR_MNT_SHIFT) *10;
+	time.hours = (time_register & (RTC_TR_HU_MASK << RTC_TR_HU_SHIFT)) >> RTC_TR_HU_SHIFT;
+	time.hours += ((time_register & (RTC_TR_HT_MASK << RTC_TR_HT_SHIFT)) >> RTC_TR_HT_SHIFT) * 10;
+}
+
+void show_time()
+{
+	digits[8] = time.seconds % 10;
+	digits[7] = time.seconds / 10;
+	digits[6] = 11;
+	digits[5] = time.minutes % 10;
+	digits[4] = time.minutes / 10;
+	digits[3] = 11;
+	digits[2] = time.hours % 10;
+	digits[1] = time.hours / 10;
+}
 
 int main(void)
 {
@@ -226,46 +300,18 @@ int main(void)
 	gpio_setup();
 	tim3_setup();
 
+
 	while (1) {
-		//gpio_toggle(PORT_LED, PIN_LED); /* LED on/off */
 
-		// Buttons
-		if (!gpio_get(GPIOA, GPIO5)) {
-			buttons |= BUTTON_3_PRESS;
-		} else {
-			buttons |= BUTTON_3_RELEASE;
-		}
+		get_buttons_input();
 
-		if(!gpio_get(GPIOA, GPIO6)) {
-			buttons |= BUTTON_2_PRESS;
-		} else {
-			buttons |= BUTTON_2_RELEASE;
-		}
-
-		if(!gpio_get(GPIOA, GPIO7)) {
-			buttons |= BUTTON_1_PRESS;
-		} else {
-			buttons |= BUTTON_1_RELEASE;
-		}
-
-		if ( (buttons ) != 0) {
-			procces_intput();
-			buttons = 0;
-		}
-
-		for (i = 0; i < 10000; i++) { /* Wait a bit. */
+		for (i = 0; i < 5000; i++) { /* Wait a bit. */
 			__asm__("nop");
 		}
-		clear_digits();
-		uint8_t s = 0;
-		digits[8] = RTC_TR & RTC_TR_SU_MASK;
-		digits[7] = (RTC_TR & (RTC_TR_ST_MASK << RTC_TR_ST_SHIFT)) >> RTC_TR_ST_SHIFT;
-		digits[6] = 11;
-		digits[5] = (RTC_TR & (RTC_TR_MNU_MASK << RTC_TR_MNU_SHIFT)) >> RTC_TR_MNU_SHIFT;
-		digits[4] = (RTC_TR & (RTC_TR_MNT_MASK << RTC_TR_MNT_SHIFT)) >> RTC_TR_MNT_SHIFT;
-		digits[3] = 11;
-		digits[2] = (RTC_TR & (RTC_TR_HU_MASK << RTC_TR_HU_SHIFT)) >> RTC_TR_HU_SHIFT;
-		digits[1] = (RTC_TR & (RTC_TR_HT_MASK << RTC_TR_HT_SHIFT)) >> RTC_TR_HT_SHIFT;
+		//clear_digits();
+		get_time();
+		show_time();
+
 	}
 
 	return 0;
@@ -338,67 +384,3 @@ void tim3_isr(void)
 		count++;
 	}
 }
-
-/*
-void tim3_isr(void)
-{
-	static uint8_t cnt = 0;
-	uint8_t s;
-	uint32_t data_out;
-	uint16_t digit;
-	uint32_t i;
-	volatile t;
-
-	if (timer_get_flag(TIM3, TIM_SR_CC1IF)) {
-
-		// Clear compare interrupt flag.
-		timer_clear_flag(TIM3, TIM_SR_CC1IF);
-
-		//gpio_toggle(PORT_LED, PIN_LED); // LED on/off
-
-		digit = (1 << cnt);
-		data_out = digit;
-		data_out |= (uint32_t)segments[digits[cnt]] << 10;
-
-		SET_BLANK();
-		__asm__("nop");
-		__asm__("nop");
-
-		i=20;
-		do{
-			i--;
-			if(data_out & (1 << i) )
-				SET_DATAIN();
-			else
-				CLEAR_DATAIN();
-			
-				__asm__("nop");
-			//set_clk(1);
-			SET_CLOCK();
-			for (t=0;t!=2;++t)
-				__asm__("nop");
-			
-			
-			//timeout();
-			CLEAR_CLOCK();
-			for (t=0;t!=2;++t)
-				__asm__("nop");
-			//timeout();
-		} while ( i!=0 );
-		
-		SET_STROBE();
-		for (t=0;t!=4;++t)
-				__asm__("nop");
-		
-		CLEAR_STROBE();
-		for (t=0;t!=4;++t)
-				__asm__("nop");
-		
-		CLEAR_BLANK();
-
-		cnt++;
-		cnt %=10;
-		count++;
-	}
-}
-*/
